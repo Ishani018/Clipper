@@ -1,4 +1,4 @@
-# ✂️ Clipper
+# Clipper
 
 **A tiny, zero-dependency tool for removing flat backgrounds from sprites and exporting a transparent PNG — losslessly.** Open one HTML file in any browser; your images never leave your machine.
 
