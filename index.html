@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Clipper — background remover for sprites (lossless)</title>
+<style>
+  :root {
+    --bg: #14110d; --panel: #221b12; --accent: #f0a850; --accent2: #70a840;
+    --text: #ffe8c0; --muted: #b89a6a; --line: #4a3a22;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  body { display: flex; height: 100vh; overflow: hidden; }
+
+  #sidebar { width: 300px; flex-shrink: 0; background: var(--panel);
+    border-right: 2px solid var(--line); display: flex; flex-direction: column; overflow-y: auto; }
+  #sidebar h1 { font-size: 16px; margin: 14px 14px 4px; letter-spacing: 1px; }
+  #sidebar .sub { color: var(--muted); font-size: 11px; margin: 0 14px 12px; line-height: 1.5; }
+  .section { padding: 11px 14px; border-top: 1px solid var(--line); }
+  .section h2 { font-size: 11px; color: var(--accent); letter-spacing: 1px; margin: 0 0 8px; text-transform: uppercase; }
+
+  label.filebtn { display: block; cursor: pointer; background: #3a2a14; border: 1px solid var(--line);
+    border-radius: 7px; padding: 9px 10px; margin-bottom: 6px; text-align: center; color: var(--text); }
+  label.filebtn:hover { border-color: var(--accent); }
+  input[type=file] { display: none; }
+
+  .tool { display: block; width: 100%; text-align: left; margin-bottom: 5px;
+    background: #2a2010; border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+  .tool:hover { border-color: var(--accent); }
+  .tool.active { background: #4a3414; border-color: var(--accent); }
+  .tool small { display: block; color: var(--muted); font-size: 10px; margin-top: 2px; }
+
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row label { color: var(--muted); flex: 1; }
+  input[type=range] { flex: 1.4; accent-color: var(--accent); }
+  .val { width: 34px; text-align: right; color: var(--text); }
+
+  .btn { background: #3a2a14; border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 8px 10px; cursor: pointer; font: inherit; font-size: 12px; width: 100%; margin-bottom: 6px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent2); border-color: #8fce5a; color: #0e2606; font-weight: bold; }
+  .btn.warn:hover { border-color: #d05050; color: #ff9090; }
+  .ctrls2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .ctrls2 .btn { margin-bottom: 0; }
+
+  .swatch { display: inline-block; width: 22px; height: 22px; border-radius: 4px;
+    border: 1.5px solid var(--line); vertical-align: middle; margin-left: 6px; }
+
+  #stageWrap { flex: 1; display: flex; align-items: center; justify-content: center;
+    overflow: auto; position: relative;
+    background:
+      linear-gradient(45deg,#1d1810 25%,transparent 25%),
+      linear-gradient(-45deg,#1d1810 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#1d1810 75%),
+      linear-gradient(-45deg,transparent 75%,#1d1810 75%);
+    background-size: 24px 24px; background-position: 0 0,0 12px,12px -12px,-12px 0; }
+  #canvas { image-rendering: pixelated; box-shadow: 0 8px 40px rgba(0,0,0,.6);
+    border: 1px solid var(--line); cursor: crosshair; max-width: 96%; max-height: 92%; }
+  .empty { color: var(--muted); text-align: center; line-height: 1.8; padding: 0 24px; }
+</style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>✂️ CLIPPER</h1>
+    <div class="sub">Remove flat backgrounds from sprites and export a transparent
+      PNG — <b>lossless</b> (only background pixels get erased; your subject is
+      untouched). 100% in your browser.</div>
+
+    <div class="section">
+      <h2>Image</h2>
+      <label class="filebtn">Upload image<input type="file" id="fileInput" accept="image/*" /></label>
+      <div class="ctrls2">
+        <button class="btn" id="undoBtn">Undo</button>
+        <button class="btn warn" id="resetBtn">Reset</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Tool</h2>
+      <button class="tool active" data-tool="wand" id="toolWand">Magic wand
+        <small>Click a background area — erases connected similar pixels.</small></button>
+      <button class="tool" data-tool="key" id="toolKey">Color key
+        <small>Click a color — erases that color everywhere in the image.</small></button>
+      <button class="tool" data-tool="restore" id="toolRestore">Restore brush
+        <small>Click/drag to paint erased pixels back.</small></button>
+    </div>
+
+    <div class="section">
+      <h2>Settings</h2>
+      <div class="row"><label>Tolerance</label>
+        <input type="range" id="tol" min="0" max="120" value="32" />
+        <span class="val" id="tolVal">32</span></div>
+      <div class="row"><label>Edge feather</label>
+        <input type="range" id="feather" min="0" max="4" value="1" />
+        <span class="val" id="featherVal">1</span></div>
+      <div class="row"><label>Brush size</label>
+        <input type="range" id="brush" min="4" max="80" value="24" />
+        <span class="val" id="brushVal">24</span></div>
+      <div class="row"><label>Picked color</label>
+        <span class="swatch" id="swatch"></span></div>
+    </div>
+
+    <div class="section">
+      <h2>One-click</h2>
+      <button class="btn" id="autoEdges">Auto-remove from edges
+        </button>
+      <div class="sub" style="margin:0">Flood-fills transparent from all 4 edges —
+        great when the subject doesn't touch the border.</div>
+    </div>
+
+    <div class="section">
+      <h2>Export</h2>
+      <button class="btn primary" id="exportBtn">Download PNG</button>
+      <div class="sub" style="margin:6px 0 0">Saved as PNG with transparency — no
+        recompression of your subject.</div>
+    </div>
+  </div>
+
+  <div id="stageWrap">
+    <canvas id="canvas"></canvas>
+    <div class="empty" id="emptyMsg">Upload a sprite to start.<br>Tip: try
+      “Auto-remove from edges”, then tidy up with the Magic wand.</div>
+  </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const emptyMsg = document.getElementById('emptyMsg');
+let W = 0, H = 0;
+let history = [];          // stack of ImageData for undo
+let baseImage = null;      // original ImageData (for Reset)
+let tool = 'wand';
+let pickedColor = [255, 255, 255];
+
+const tol = document.getElementById('tol');
+const feather = document.getElementById('feather');
+const brush = document.getElementById('brush');
+const swatch = document.getElementById('swatch');
+['tol','feather','brush'].forEach(id => {
+  const el = document.getElementById(id);
+  const out = document.getElementById(id + 'Val');
+  el.addEventListener('input', () => out.textContent = el.value);
+});
+
+// ── File load ────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    W = img.naturalWidth; H = img.naturalHeight;
+    canvas.width = W; canvas.height = H;
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(img, 0, 0);
+    baseImage = ctx.getImageData(0, 0, W, H);
+    history = [cloneData(baseImage)];
+    emptyMsg.style.display = 'none';
+    canvas.style.display = 'block';
+  };
+  img.src = URL.createObjectURL(f);
+});
+
+function cloneData(d) { return new ImageData(new Uint8ClampedArray(d.data), d.width, d.height); }
+function pushHistory() { history.push(ctx.getImageData(0, 0, W, H)); if (history.length > 40) history.shift(); }
+
+// ── Tool selection ───────────────────────────────────────────
+document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.tool').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  tool = b.dataset.tool;
+}));
+
+// ── Canvas pointer → image pixel ─────────────────────────────
+function evtToPixel(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * W);
+  const y = Math.floor((e.clientY - r.top) / r.height * H);
+  return { x: Math.max(0, Math.min(W - 1, x)), y: Math.max(0, Math.min(H - 1, y)) };
+}
+
+let drawing = false;
+canvas.addEventListener('pointerdown', (e) => {
+  if (!W) return;
+  const { x, y } = evtToPixel(e);
+  if (tool === 'wand') { pushHistory(); floodErase(x, y); }
+  else if (tool === 'key') { pickColorAt(x, y); pushHistory(); colorKey(); }
+  else if (tool === 'restore') { drawing = true; pushHistory(); restoreAt(x, y); }
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!drawing || tool !== 'restore') return;
+  const { x, y } = evtToPixel(e); restoreAt(x, y);
+});
+window.addEventListener('pointerup', () => { drawing = false; });
+
+// ── Color helpers ────────────────────────────────────────────
+function pickColorAt(x, y) {
+  const d = ctx.getImageData(x, y, 1, 1).data;
+  pickedColor = [d[0], d[1], d[2]];
+  swatch.style.background = `rgb(${d[0]},${d[1]},${d[2]})`;
+}
+function colorDist2(r, g, b, c) {
+  const dr = r - c[0], dg = g - c[1], db = b - c[2];
+  return dr * dr + dg * dg + db * db;
+}
+
+// ── Magic wand: flood-fill erase connected similar pixels ────
+function floodErase(sx, sy) {
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  const idx0 = (sy * W + sx) * 4;
+  const target = [d[idx0], d[idx0 + 1], d[idx0 + 2]];
+  swatch.style.background = `rgb(${target[0]},${target[1]},${target[2]})`;
+  const t = +tol.value; const t2 = t * t;
+  const seen = new Uint8Array(W * H);
+  const stack = [sy * W + sx];
+  while (stack.length) {
+    const p = stack.pop();
+    if (seen[p]) continue; seen[p] = 1;
+    const i = p * 4;
+    if (d[i + 3] === 0) continue;
+    if (colorDist2(d[i], d[i + 1], d[i + 2], target) > t2) continue;
+    d[i + 3] = 0; // erase
+    const x = p % W, y = (p / W) | 0;
+    if (x > 0) stack.push(p - 1);
+    if (x < W - 1) stack.push(p + 1);
+    if (y > 0) stack.push(p - W);
+    if (y < H - 1) stack.push(p + W);
+  }
+  ctx.putImageData(img, 0, 0);
+  applyFeather();
+}
+
+// ── Color key: erase that color everywhere ───────────────────
+function colorKey() {
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data; const t2 = (+tol.value) ** 2;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] === 0) continue;
+    if (colorDist2(d[i], d[i + 1], d[i + 2], pickedColor) <= t2) d[i + 3] = 0;
+  }
+  ctx.putImageData(img, 0, 0);
+  applyFeather();
+}
+
+// ── Auto: flood from all four edges ──────────────────────────
+document.getElementById('autoEdges').addEventListener('click', () => {
+  if (!W) return; pushHistory();
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data; const t2 = (+tol.value) ** 2;
+  const seen = new Uint8Array(W * H);
+  const stack = [];
+  const seed = (x, y) => { const i = (y * W + x) * 4; if (d[i + 3] !== 0) stack.push(y * W + x); };
+  for (let x = 0; x < W; x++) { seed(x, 0); seed(x, H - 1); }
+  for (let y = 0; y < H; y++) { seed(0, y); seed(W - 1, y); }
+  // reference = average of the 4 corners
+  const corners = [[0,0],[W-1,0],[0,H-1],[W-1,H-1]].map(([x,y]) => { const i=(y*W+x)*4; return [d[i],d[i+1],d[i+2]]; });
+  const ref = [0,1,2].map(c => Math.round(corners.reduce((s,k)=>s+k[c],0)/4));
+  while (stack.length) {
+    const p = stack.pop(); if (seen[p]) continue; seen[p] = 1;
+    const i = p * 4; if (d[i + 3] === 0) continue;
+    if (colorDist2(d[i], d[i + 1], d[i + 2], ref) > t2) continue;
+    d[i + 3] = 0;
+    const x = p % W, y = (p / W) | 0;
+    if (x > 0) stack.push(p - 1); if (x < W - 1) stack.push(p + 1);
+    if (y > 0) stack.push(p - W); if (y < H - 1) stack.push(p + W);
+  }
+  ctx.putImageData(img, 0, 0);
+  applyFeather();
+});
+
+// ── Restore brush: paint original pixels back ────────────────
+function restoreAt(cx, cy) {
+  if (!baseImage) return;
+  const r = Math.round(+brush.value / 2);
+  const cur = ctx.getImageData(0, 0, W, H); const d = cur.data; const b = baseImage.data;
+  for (let y = Math.max(0, cy - r); y <= Math.min(H - 1, cy + r); y++)
+    for (let x = Math.max(0, cx - r); x <= Math.min(W - 1, cx + r); x++) {
+      if ((x - cx) ** 2 + (y - cy) ** 2 > r * r) continue;
+      const i = (y * W + x) * 4;
+      d[i] = b[i]; d[i + 1] = b[i + 1]; d[i + 2] = b[i + 2]; d[i + 3] = b[i + 3];
+    }
+  ctx.putImageData(cur, 0, 0);
+}
+
+// ── Edge feather: soften the alpha boundary (anti-alias) ─────
+function applyFeather() {
+  const f = +feather.value; if (f <= 0) return;
+  const img = ctx.getImageData(0, 0, W, H); const d = img.data;
+  const a = new Uint8ClampedArray(W * H);
+  for (let p = 0; p < W * H; p++) a[p] = d[p * 4 + 3];
+  // simple box blur of the alpha only, near edges
+  const out = new Uint8ClampedArray(a);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const p = y * W + x; const cur = a[p];
+    // only feather pixels adjacent to a transparent one
+    let edge = false;
+    if (x>0 && a[p-1]!==cur) edge = true; else if (x<W-1 && a[p+1]!==cur) edge = true;
+    else if (y>0 && a[p-W]!==cur) edge = true; else if (y<H-1 && a[p+W]!==cur) edge = true;
+    if (!edge) continue;
+    let sum = 0, n = 0;
+    for (let dy = -f; dy <= f; dy++) for (let dx = -f; dx <= f; dx++) {
+      const nx = x+dx, ny = y+dy; if (nx<0||ny<0||nx>=W||ny>=H) continue;
+      sum += a[ny*W+nx]; n++;
+    }
+    out[p] = Math.round(sum / n);
+  }
+  for (let p = 0; p < W * H; p++) d[p * 4 + 3] = out[p];
+  ctx.putImageData(img, 0, 0);
+}
+
+// ── Undo / Reset ─────────────────────────────────────────────
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (history.length > 1) { history.pop(); ctx.putImageData(history[history.length - 1], 0, 0); }
+});
+document.getElementById('resetBtn').addEventListener('click', () => {
+  if (baseImage) { ctx.putImageData(baseImage, 0, 0); history = [cloneData(baseImage)]; }
+});
+
+// ── Export transparent PNG ───────────────────────────────────
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!W) return;
+  const a = document.createElement('a');
+  a.download = 'cutout.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); document.getElementById('undoBtn').click(); }
+});
+</script>
+</body>
+</html>
