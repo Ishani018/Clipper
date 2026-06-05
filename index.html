@@ -179,7 +179,9 @@ let history = [];          // stack of ImageData for undo
 let baseImage = null;      // original ImageData (for Reset)
 let tool = 'wand';
 let pickedColor = [255, 255, 255];
-let detectedBoxes = [];    // [{x,y,w,h}] from blob/grid detection
+let detectedBoxes = [];    // [{id,x,y,w,h}] from blob/grid detection
+let spriteLabelMap = null; // per-pixel blob label (auto-detect only)
+let spriteLabelW = 0;
 
 const tol = document.getElementById('tol');
 const feather = document.getElementById('feather');
@@ -483,17 +485,19 @@ document.getElementById('detectBlobs').addEventListener('click', () => {
     grp = out;
   }
 
-  // label connected components of the (possibly dilated) grouping mask, 8-conn
+  // label connected components of the (possibly dilated) grouping mask, 8-conn.
+  // Keep the label map so each sprite's crop can mask out neighbours whose
+  // bounding box overlaps but whose pixels belong to a different blob.
   const label = new Int32Array(W * H).fill(-1);
   const boxes = [];
   for (let s = 0; s < W * H; s++) {
     if (!grp[s] || label[s] !== -1) continue;
+    const id = boxes.length;
     let minX = W, minY = H, maxX = 0, maxY = 0, count = 0;
-    const stack = [s]; label[s] = boxes.length;
+    const stack = [s]; label[s] = id;
     while (stack.length) {
       const p = stack.pop();
       const x = p % W, y = (p / W) | 0;
-      // grow the box using the ORIGINAL opaque pixel, not the dilated one
       if (mask[p]) {
         count++;
         if (x < minX) minX = x; if (x > maxX) maxX = x;
@@ -503,11 +507,13 @@ document.getElementById('detectBlobs').addEventListener('click', () => {
         if (!dx && !dy) continue;
         const nx = x + dx, ny = y + dy; if (nx<0||ny<0||nx>=W||ny>=H) continue;
         const q = ny * W + nx;
-        if (grp[q] && label[q] === -1) { label[q] = boxes.length; stack.push(q); }
+        if (grp[q] && label[q] === -1) { label[q] = id; stack.push(q); }
       }
     }
-    if (count > 0) boxes.push({ x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1, count });
+    if (count > 0) boxes.push({ id, x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1, count });
   }
+  spriteLabelMap = label;       // persist for masked cropping
+  spriteLabelW = W;
   const minSz = +document.getElementById('minBlob').value;
   detectedBoxes = boxes.filter((b) => b.w >= minSz && b.h >= minSz);
   drawBoxes();
@@ -533,6 +539,7 @@ document.getElementById('sliceGrid').addEventListener('click', () => {
     }
     if (found) detectedBoxes.push({ x: mnX, y: mnY, w: mxX - mnX + 1, h: mxY - mnY + 1 });
   }
+  spriteLabelMap = null; // grid cells crop as plain rects (no blob masking)
   drawBoxes();
   buildSpriteList();
   document.getElementById('detectInfo').textContent = `${detectedBoxes.length} sprites from ${cols}×${rows} grid.`;
@@ -550,11 +557,23 @@ function drawBoxes() {
   });
 }
 
-// Extract one box to its own tightly-cropped canvas.
+// Extract one box to its own tightly-cropped canvas. When we have a blob label
+// map (auto-detect), mask out any pixels inside the rectangle that belong to a
+// DIFFERENT sprite — so overlapping bounding boxes don't leak neighbour pixels.
 function cropBox(b) {
   const c = document.createElement('canvas');
   c.width = b.w; c.height = b.h;
-  c.getContext('2d').drawImage(canvas, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  const cc = c.getContext('2d');
+  cc.drawImage(canvas, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+  if (spriteLabelMap && b.id !== undefined) {
+    const img = cc.getImageData(0, 0, b.w, b.h);
+    const d = img.data;
+    for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
+      const srcP = (b.y + yy) * spriteLabelW + (b.x + xx);
+      if (spriteLabelMap[srcP] !== b.id) d[(yy * b.w + xx) * 4 + 3] = 0; // not this sprite
+    }
+    cc.putImageData(img, 0, 0);
+  }
   return c;
 }
 
